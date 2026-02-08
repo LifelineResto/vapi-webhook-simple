@@ -1,4 +1,4 @@
-# Version: 2026-02-08 with SMS Notifications
+# Version: 2026-02-08 with SMS + Albiware Integration
 
 from flask import Flask, request, jsonify
 import requests
@@ -18,6 +18,12 @@ TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
 TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER', '')
 TECHNICIAN_PHONES = os.environ.get('TECHNICIAN_PHONES', '').split(',')
 
+# Albiware configuration
+ALBIWARE_API_KEY = os.environ.get('ALBIWARE_API_KEY', '')
+ALBIWARE_BASE_URL = 'https://api.albiware.com/v5/Integrations'
+ALBIWARE_CONTACT_TYPE_ID = 27594  # Contact type ID for 'Customer' in Albiware
+ALBIWARE_REFERRAL_SOURCE_ID = 28704  # Referral source ID for 'Lead Gen'
+
 # Initialize Twilio client if credentials are available
 twilio_client = None
 if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
@@ -25,6 +31,94 @@ if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
         twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
     except Exception as e:
         print(f"⚠️ Failed to initialize Twilio client: {e}")
+
+def parse_address(address_string):
+    """Parse address string into components for Albiware"""
+    # Default values
+    address_parts = {
+        'address1': address_string,
+        'city': '',
+        'state': '',
+        'zipCode': ''
+    }
+    
+    if not address_string:
+        return address_parts
+    
+    try:
+        # Try to parse "123 Main St, Las Vegas, NV 89101" format
+        parts = [p.strip() for p in address_string.split(',')]
+        
+        if len(parts) >= 3:
+            address_parts['address1'] = parts[0]  # Street address
+            address_parts['city'] = parts[1]      # City
+            
+            # Parse "NV 89101" or "Nevada 89101"
+            state_zip = parts[2].strip().split()
+            if len(state_zip) >= 1:
+                address_parts['state'] = state_zip[0]
+            if len(state_zip) >= 2:
+                address_parts['zipCode'] = state_zip[1]
+        elif len(parts) == 2:
+            address_parts['address1'] = parts[0]
+            address_parts['city'] = parts[1]
+    except Exception as e:
+        print(f"⚠️ Error parsing address: {e}")
+        # Fall back to using the full address as address1
+    
+    return address_parts
+
+def create_albiware_contact(lead_data):
+    """Create a contact in Albiware"""
+    if not ALBIWARE_API_KEY:
+        print("⚠️ Albiware API key not configured - skipping contact creation")
+        return False
+    
+    try:
+        # Parse address
+        address_parts = parse_address(lead_data.get('address', ''))
+        
+        # Prepare contact data for Albiware
+        contact_data = {
+            'firstName': lead_data.get('first_name', ''),
+            'lastName': lead_data.get('last_name', ''),
+            'phoneNumber': lead_data.get('phone_number', ''),
+            'address1': address_parts['address1'],
+            'city': address_parts['city'],
+            'state': address_parts['state'],
+            'zipCode': address_parts['zipCode'],
+            'contactTypeIds': [ALBIWARE_CONTACT_TYPE_ID],
+            'referralSourceId': ALBIWARE_REFERRAL_SOURCE_ID,
+            'latitude': 0,
+            'longitude': 0
+        }
+        
+        # Make API request to Albiware
+        headers = {
+            'accept': 'application/json',
+            'content-type': 'application/json',
+            'ApiKey': ALBIWARE_API_KEY
+        }
+        
+        response = requests.post(
+            f'{ALBIWARE_BASE_URL}/Contacts/Create',
+            json=contact_data,
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            contact_id = result.get('data', 'unknown')
+            print(f"✅ Contact created in Albiware: {lead_data['first_name']} {lead_data['last_name']} (ID: {contact_id})")
+            return True
+        else:
+            print(f"❌ Failed to create Albiware contact: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error creating Albiware contact: {e}")
+        return False
 
 def send_sms_notification(lead_data):
     """Send SMS notification to technicians with lead information"""
@@ -72,9 +166,10 @@ def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'service': 'Vapi Webhook - Lifeline Restoration (with SMS)',
+        'service': 'Vapi Webhook - Lifeline Restoration (SMS + Albiware)',
         'apps_script_configured': bool(APPS_SCRIPT_URL),
         'twilio_configured': bool(twilio_client and TWILIO_PHONE_NUMBER),
+        'albiware_configured': bool(ALBIWARE_API_KEY),
         'technician_count': len([n for n in TECHNICIAN_PHONES if n.strip()]),
         'structured_output_id': STRUCTURED_OUTPUT_ID,
         'timestamp': datetime.utcnow().isoformat()
@@ -132,7 +227,10 @@ def webhook():
             except Exception as e:
                 print(f"❌ Error sending to Google Sheets: {e}")
         
-        # Send SMS notification to sales team
+        # Create contact in Albiware
+        albiware_success = create_albiware_contact(sheet_data)
+        
+        # Send SMS notification to technicians
         sms_success = send_sms_notification(sheet_data)
         
         # Return response
@@ -140,6 +238,7 @@ def webhook():
             'status': 'success',
             'data': sheet_data,
             'sheets_updated': sheets_success,
+            'albiware_contact_created': albiware_success,
             'sms_sent': sms_success
         }), 200
             
@@ -156,7 +255,7 @@ def test_endpoint():
         'phone_number': '555-0000',
         'address': '123 Test Street, Las Vegas, NV 89101',
         'referral_source': 'Manual Test',
-        'issue_summary': 'standard - Testing SMS notification',
+        'issue_summary': 'standard - Testing full system',
         'urgency': 'standard'
     }
     
@@ -169,12 +268,16 @@ def test_endpoint():
         except:
             pass
     
+    # Create in Albiware
+    albiware_success = create_albiware_contact(test_data)
+    
     # Send SMS
     sms_success = send_sms_notification(test_data)
     
     return jsonify({
         'status': 'test_complete',
         'sheets_updated': sheets_success,
+        'albiware_contact_created': albiware_success,
         'sms_sent': sms_success,
         'data': test_data
     }), 200
@@ -198,6 +301,27 @@ def test_sms():
         'status': 'sms_test_complete',
         'sms_sent': sms_success,
         'recipients': [n.strip() for n in TECHNICIAN_PHONES if n.strip()]
+    }), 200
+
+@app.route('/test-albiware', methods=['POST'])
+def test_albiware():
+    """Test Albiware contact creation only"""
+    test_data = {
+        'first_name': 'Albiware',
+        'last_name': 'Test',
+        'phone_number': '555-ALBI',
+        'address': '456 Integration Ave, Las Vegas, NV 89102',
+        'referral_source': 'API Test',
+        'issue_summary': 'standard - Testing Albiware integration',
+        'urgency': 'standard'
+    }
+    
+    albiware_success = create_albiware_contact(test_data)
+    
+    return jsonify({
+        'status': 'albiware_test_complete',
+        'contact_created': albiware_success,
+        'data': test_data
     }), 200
 
 @app.route('/debug', methods=['POST'])
