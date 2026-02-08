@@ -1,10 +1,15 @@
-# Version: 2026-02-08 with SMS + Albiware Integration
+# Version: 2026-02-08 with SMS + Albiware + Google Calendar Appointments
 
 from flask import Flask, request, jsonify
 import requests
 import os
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from twilio.rest import Client
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+import pytz
 
 app = Flask(__name__)
 
@@ -24,7 +29,26 @@ ALBIWARE_BASE_URL = 'https://api.albiware.com/v5/Integrations'
 ALBIWARE_CONTACT_TYPE_ID = 27594  # Contact type ID for 'Customer' in Albiware
 ALBIWARE_REFERRAL_SOURCE_ID = 28704  # Referral source ID for 'Lead Gen'
 
-# Initialize Twilio client if credentials are available
+# Google Calendar configuration
+GOOGLE_CALENDAR_CREDENTIALS = os.environ.get('GOOGLE_CALENDAR_CREDENTIALS', '')
+GOOGLE_CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_ID', 'b57334134fd9705b98d1367b33de59fc35411570ce6b9ed14a42eb271dc8e990@group.calendar.google.com')
+
+# Business hours configuration (Pacific Time)
+BUSINESS_HOURS = {
+    0: None,  # Monday
+    1: {'start': 8, 'end': 18},  # Tuesday (8 AM - 6 PM)
+    2: {'start': 8, 'end': 18},  # Wednesday
+    3: {'start': 8, 'end': 18},  # Thursday
+    4: {'start': 8, 'end': 18},  # Friday
+    5: {'start': 9, 'end': 16},  # Saturday (9 AM - 4 PM)
+    6: None,  # Sunday (closed)
+}
+# Fix Monday
+BUSINESS_HOURS[0] = {'start': 8, 'end': 18}  # Monday
+
+APPOINTMENT_DURATION_MINUTES = 60  # 1 hour appointments
+
+# Initialize Twilio client
 twilio_client = None
 if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
     try:
@@ -32,9 +56,26 @@ if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
     except Exception as e:
         print(f"⚠️ Failed to initialize Twilio client: {e}")
 
+# Initialize Google Calendar client
+calendar_service = None
+if GOOGLE_CALENDAR_CREDENTIALS:
+    try:
+        credentials_dict = json.loads(GOOGLE_CALENDAR_CREDENTIALS)
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_dict,
+            scopes=['https://www.googleapis.com/auth/calendar']
+        )
+        calendar_service = build('calendar', 'v3', credentials=credentials)
+        print("✅ Google Calendar service initialized")
+    except Exception as e:
+        print(f"⚠️ Failed to initialize Google Calendar: {e}")
+
+def get_pacific_time():
+    """Get current time in Pacific timezone"""
+    return datetime.now(pytz.timezone('America/Los_Angeles'))
+
 def parse_address(address_string):
     """Parse address string into components for Albiware"""
-    # Default values
     address_parts = {
         'address1': address_string,
         'city': '',
@@ -46,14 +87,12 @@ def parse_address(address_string):
         return address_parts
     
     try:
-        # Try to parse "123 Main St, Las Vegas, NV 89101" format
         parts = [p.strip() for p in address_string.split(',')]
         
         if len(parts) >= 3:
-            address_parts['address1'] = parts[0]  # Street address
-            address_parts['city'] = parts[1]      # City
+            address_parts['address1'] = parts[0]
+            address_parts['city'] = parts[1]
             
-            # Parse "NV 89101" or "Nevada 89101"
             state_zip = parts[2].strip().split()
             if len(state_zip) >= 1:
                 address_parts['state'] = state_zip[0]
@@ -64,7 +103,6 @@ def parse_address(address_string):
             address_parts['city'] = parts[1]
     except Exception as e:
         print(f"⚠️ Error parsing address: {e}")
-        # Fall back to using the full address as address1
     
     return address_parts
 
@@ -75,10 +113,8 @@ def create_albiware_contact(lead_data):
         return False
     
     try:
-        # Parse address
         address_parts = parse_address(lead_data.get('address', ''))
         
-        # Prepare contact data for Albiware
         contact_data = {
             'firstName': lead_data.get('first_name', ''),
             'lastName': lead_data.get('last_name', ''),
@@ -93,7 +129,6 @@ def create_albiware_contact(lead_data):
             'longitude': 0
         }
         
-        # Make API request to Albiware
         headers = {
             'accept': 'application/json',
             'content-type': 'application/json',
@@ -120,18 +155,31 @@ def create_albiware_contact(lead_data):
         print(f"❌ Error creating Albiware contact: {e}")
         return False
 
-def send_sms_notification(lead_data):
-    """Send SMS notification to technicians with lead information"""
+def send_sms_notification(lead_data, message_type='lead'):
+    """Send SMS notification to technicians"""
     if not twilio_client or not TWILIO_PHONE_NUMBER or not TECHNICIAN_PHONES[0]:
         print("⚠️ SMS not configured - skipping notification")
         return False
     
-    # Determine urgency emoji
     urgency = lead_data.get('urgency', 'standard').lower()
     emoji = "🚨" if 'emergency' in urgency else "📋"
     
-    # Format the SMS message
-    message_body = f"""{emoji} NEW LEAD - Lifeline Restoration
+    if message_type == 'appointment':
+        # Appointment confirmation SMS
+        appointment_time = lead_data.get('appointment_datetime', '')
+        message_body = f"""📅 APPOINTMENT BOOKED - Lifeline Restoration
+
+Name: {lead_data.get('first_name', '')} {lead_data.get('last_name', '')}
+Phone: {lead_data.get('phone_number', 'Not provided')}
+Address: {lead_data.get('address', 'Not provided')}
+Issue: {lead_data.get('issue_summary', 'Not specified')}
+
+Appointment: {appointment_time}
+
+Booked: {get_pacific_time().strftime('%I:%M %p PT')}"""
+    else:
+        # Regular lead notification
+        message_body = f"""{emoji} NEW LEAD - Lifeline Restoration
 
 Name: {lead_data.get('first_name', '')} {lead_data.get('last_name', '')}
 Phone: {lead_data.get('phone_number', 'Not provided')}
@@ -139,9 +187,8 @@ Address: {lead_data.get('address', 'Not provided')}
 Issue: {lead_data.get('issue_summary', 'Not specified')}
 Source: {lead_data.get('referral_source', 'Unknown')}
 
-Time: {datetime.now().strftime('%I:%M %p PT')}"""
-
-    # Send to each technician
+Time: {get_pacific_time().strftime('%I:%M %p PT')}"""
+    
     success_count = 0
     for phone_number in TECHNICIAN_PHONES:
         phone_number = phone_number.strip()
@@ -161,17 +208,147 @@ Time: {datetime.now().strftime('%I:%M %p PT')}"""
     
     return success_count > 0
 
+def get_available_slots(days_ahead=7):
+    """Get available appointment slots for the next N days"""
+    if not calendar_service:
+        return []
+    
+    try:
+        pacific_tz = pytz.timezone('America/Los_Angeles')
+        now = get_pacific_time()
+        
+        # Start from tomorrow to give buffer
+        start_date = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = start_date + timedelta(days=days_ahead)
+        
+        # Get existing events
+        events_result = calendar_service.events().list(
+            calendarId=GOOGLE_CALENDAR_ID,
+            timeMin=start_date.isoformat(),
+            timeMax=end_date.isoformat(),
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        
+        existing_events = events_result.get('items', [])
+        
+        # Generate available slots
+        available_slots = []
+        current_date = start_date
+        
+        while current_date < end_date:
+            weekday = current_date.weekday()
+            hours = BUSINESS_HOURS.get(weekday)
+            
+            if hours:  # If business is open this day
+                # Generate hourly slots
+                for hour in range(hours['start'], hours['end']):
+                    slot_start = current_date.replace(hour=hour, minute=0)
+                    slot_end = slot_start + timedelta(minutes=APPOINTMENT_DURATION_MINUTES)
+                    
+                    # Check if slot conflicts with existing events
+                    is_available = True
+                    for event in existing_events:
+                        event_start = datetime.fromisoformat(event['start'].get('dateTime', event['start'].get('date')))
+                        event_end = datetime.fromisoformat(event['end'].get('dateTime', event['end'].get('date')))
+                        
+                        # Make timezone-aware if needed
+                        if event_start.tzinfo is None:
+                            event_start = pacific_tz.localize(event_start)
+                        if event_end.tzinfo is None:
+                            event_end = pacific_tz.localize(event_end)
+                        
+                        # Check for overlap
+                        if not (slot_end <= event_start or slot_start >= event_end):
+                            is_available = False
+                            break
+                    
+                    if is_available:
+                        available_slots.append({
+                            'datetime': slot_start.isoformat(),
+                            'display': slot_start.strftime('%A, %B %d at %I:%M %p')
+                        })
+            
+            current_date += timedelta(days=1)
+        
+        return available_slots[:10]  # Return first 10 available slots
+        
+    except Exception as e:
+        print(f"❌ Error getting available slots: {e}")
+        return []
+
+def create_calendar_event(appointment_data):
+    """Create an event in Google Calendar"""
+    if not calendar_service:
+        print("⚠️ Calendar service not initialized")
+        return None
+    
+    try:
+        # Parse the appointment datetime
+        appointment_dt = datetime.fromisoformat(appointment_data['appointment_datetime'].replace('Z', '+00:00'))
+        pacific_tz = pytz.timezone('America/Los_Angeles')
+        
+        # Convert to Pacific time if needed
+        if appointment_dt.tzinfo is None:
+            appointment_dt = pacific_tz.localize(appointment_dt)
+        else:
+            appointment_dt = appointment_dt.astimezone(pacific_tz)
+        
+        end_dt = appointment_dt + timedelta(minutes=APPOINTMENT_DURATION_MINUTES)
+        
+        # Create event
+        event = {
+            'summary': f"Initial Assessment - {appointment_data.get('customer_name', 'Customer')}",
+            'description': f"""Customer: {appointment_data.get('customer_name', '')}
+Phone: {appointment_data.get('phone', '')}
+Address: {appointment_data.get('address', '')}
+Issue: {appointment_data.get('damage_type', '')} - {appointment_data.get('urgency', '')}
+Email: {appointment_data.get('email', 'Not provided')}
+
+Booked via Vapi AI Assistant""",
+            'location': appointment_data.get('address', ''),
+            'start': {
+                'dateTime': appointment_dt.isoformat(),
+                'timeZone': 'America/Los_Angeles',
+            },
+            'end': {
+                'dateTime': end_dt.isoformat(),
+                'timeZone': 'America/Los_Angeles',
+            },
+            'reminders': {
+                'useDefault': False,
+                'overrides': [
+                    {'method': 'email', 'minutes': 24 * 60},  # 1 day before
+                    {'method': 'popup', 'minutes': 60},  # 1 hour before
+                ],
+            },
+        }
+        
+        created_event = calendar_service.events().insert(
+            calendarId=GOOGLE_CALENDAR_ID,
+            body=event
+        ).execute()
+        
+        print(f"✅ Calendar event created: {created_event.get('id')}")
+        return created_event
+        
+    except Exception as e:
+        print(f"❌ Error creating calendar event: {e}")
+        return None
+
 @app.route('/')
 def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'service': 'Vapi Webhook - Lifeline Restoration (SMS + Albiware)',
+        'service': 'Vapi Webhook - Lifeline Restoration (Full System + Calendar)',
         'apps_script_configured': bool(APPS_SCRIPT_URL),
         'twilio_configured': bool(twilio_client and TWILIO_PHONE_NUMBER),
         'albiware_configured': bool(ALBIWARE_API_KEY),
+        'calendar_configured': bool(calendar_service),
         'technician_count': len([n for n in TECHNICIAN_PHONES if n.strip()]),
         'structured_output_id': STRUCTURED_OUTPUT_ID,
+        'calendar_id': GOOGLE_CALENDAR_ID,
         'timestamp': datetime.utcnow().isoformat()
     })
 
@@ -198,10 +375,9 @@ def webhook():
             print("❌ No structured output data found in webhook")
             return jsonify({'status': 'error', 'message': 'No structured output data found'}), 400
         
-        # Get customer phone number from call data as fallback
         customer_number = data.get('message', {}).get('call', {}).get('customer', {}).get('number', '')
         
-        # Map Vapi field names to our format
+        # Map Vapi field names
         sheet_data = {
             'first_name': lead_data.get('first_name', ''),
             'last_name': lead_data.get('last_name', ''),
@@ -220,20 +396,17 @@ def webhook():
             try:
                 response = requests.post(APPS_SCRIPT_URL, json=sheet_data, timeout=10)
                 if response.status_code == 200:
-                    print(f"✅ Lead added to Google Sheets: {sheet_data['first_name']} {sheet_data['last_name']}")
+                    print(f"✅ Lead added to Google Sheets")
                     sheets_success = True
-                else:
-                    print(f"❌ Failed to send to Google Sheets: {response.status_code}")
             except Exception as e:
                 print(f"❌ Error sending to Google Sheets: {e}")
         
         # Create contact in Albiware
         albiware_success = create_albiware_contact(sheet_data)
         
-        # Send SMS notification to technicians
+        # Send SMS notification
         sms_success = send_sms_notification(sheet_data)
         
-        # Return response
         return jsonify({
             'status': 'success',
             'data': sheet_data,
@@ -246,9 +419,138 @@ def webhook():
         print(f"❌ Error processing webhook: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@app.route('/check-availability', methods=['POST'])
+def check_availability():
+    """Vapi tool: Check available appointment slots"""
+    try:
+        data = request.json
+        print(f"Check availability request: {data}")
+        
+        available_slots = get_available_slots(days_ahead=7)
+        
+        if not available_slots:
+            return jsonify({
+                'result': "I apologize, but I'm having trouble accessing our calendar right now. Let me transfer you to someone who can help you schedule an appointment."
+            }), 200
+        
+        # Format slots for AI to read naturally
+        slots_text = "Here are our next available appointment times:\n"
+        for i, slot in enumerate(available_slots[:5], 1):  # Show first 5
+            slots_text += f"{i}. {slot['display']}\n"
+        
+        return jsonify({
+            'result': slots_text,
+            'available_slots': available_slots
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in check_availability: {e}")
+        return jsonify({
+            'result': "I'm having trouble checking availability right now. Let me transfer you to our scheduling team."
+        }), 200
+
+@app.route('/book-appointment', methods=['POST'])
+def book_appointment():
+    """Vapi tool: Book an appointment"""
+    try:
+        data = request.json
+        print(f"Book appointment request: {data}")
+        
+        # Extract data from Vapi tool call
+        message = data.get('message', {})
+        tool_call = message.get('toolCallList', [{}])[0] if message.get('toolCallList') else {}
+        function_args = tool_call.get('function', {}).get('arguments', {})
+        
+        # If arguments are in JSON string format, parse them
+        if isinstance(function_args, str):
+            function_args = json.loads(function_args)
+        
+        appointment_data = {
+            'customer_name': function_args.get('customer_name', ''),
+            'phone': function_args.get('phone', ''),
+            'address': function_args.get('address', ''),
+            'damage_type': function_args.get('damage_type', ''),
+            'urgency': function_args.get('urgency', 'standard'),
+            'email': function_args.get('email', ''),
+            'appointment_datetime': function_args.get('appointment_datetime', '')
+        }
+        
+        # Create calendar event
+        event = create_calendar_event(appointment_data)
+        
+        if event:
+            # Parse appointment time for display
+            appt_dt = datetime.fromisoformat(appointment_data['appointment_datetime'].replace('Z', '+00:00'))
+            display_time = appt_dt.strftime('%A, %B %d at %I:%M %p')
+            
+            # Send SMS confirmation
+            name_parts = appointment_data['customer_name'].split()
+            sms_data = {
+                'first_name': name_parts[0] if name_parts else '',
+                'last_name': ' '.join(name_parts[1:]) if len(name_parts) > 1 else '',
+                'phone_number': appointment_data['phone'],
+                'address': appointment_data['address'],
+                'issue_summary': f"{appointment_data['damage_type']} - {appointment_data['urgency']}",
+                'urgency': appointment_data['urgency'],
+                'appointment_datetime': display_time
+            }
+            send_sms_notification(sms_data, message_type='appointment')
+            
+            return jsonify({
+                'result': f"Perfect! Your appointment is confirmed for {display_time}. You'll receive a confirmation text shortly with all the details."
+            }), 200
+        else:
+            return jsonify({
+                'result': "I apologize, but I wasn't able to book that appointment. Let me transfer you to our scheduling team who can help you."
+            }), 200
+            
+    except Exception as e:
+        print(f"❌ Error in book_appointment: {e}")
+        return jsonify({
+            'result': "I'm having trouble booking that appointment. Let me transfer you to someone who can help."
+        }), 200
+
+@app.route('/cancel-appointment', methods=['POST'])
+def cancel_appointment():
+    """Vapi tool: Cancel an appointment"""
+    try:
+        data = request.json
+        print(f"Cancel appointment request: {data}")
+        
+        # For now, return a placeholder response
+        # In production, you'd search calendar by phone number and cancel the event
+        return jsonify({
+            'result': "I understand you need to cancel your appointment. Let me transfer you to our scheduling team who can help you with that."
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in cancel_appointment: {e}")
+        return jsonify({
+            'result': "I'm having trouble with that request. Let me transfer you to someone who can help."
+        }), 200
+
+@app.route('/reschedule-appointment', methods=['POST'])
+def reschedule_appointment():
+    """Vapi tool: Reschedule an appointment"""
+    try:
+        data = request.json
+        print(f"Reschedule appointment request: {data}")
+        
+        # For now, return a placeholder response
+        # In production, you'd find the existing event and update it
+        return jsonify({
+            'result': "I understand you need to reschedule. Let me transfer you to our scheduling team who can help you find a new time."
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in reschedule_appointment: {e}")
+        return jsonify({
+            'result': "I'm having trouble with that request. Let me transfer you to someone who can help."
+        }), 200
+
 @app.route('/test', methods=['POST'])
 def test_endpoint():
-    """Test endpoint to manually trigger a lead capture"""
+    """Test endpoint"""
     test_data = {
         'first_name': 'Test',
         'last_name': 'User',
@@ -259,7 +561,6 @@ def test_endpoint():
         'urgency': 'standard'
     }
     
-    # Send to Google Sheets
     sheets_success = False
     if APPS_SCRIPT_URL:
         try:
@@ -268,10 +569,7 @@ def test_endpoint():
         except:
             pass
     
-    # Create in Albiware
     albiware_success = create_albiware_contact(test_data)
-    
-    # Send SMS
     sms_success = send_sms_notification(test_data)
     
     return jsonify({
@@ -279,60 +577,35 @@ def test_endpoint():
         'sheets_updated': sheets_success,
         'albiware_contact_created': albiware_success,
         'sms_sent': sms_success,
+        'calendar_configured': bool(calendar_service),
         'data': test_data
     }), 200
 
-@app.route('/test-sms', methods=['POST'])
-def test_sms():
-    """Test SMS functionality only"""
-    test_data = {
-        'first_name': 'SMS',
-        'last_name': 'Test',
-        'phone_number': '555-TEST',
-        'address': '123 Test St, Las Vegas, NV',
-        'referral_source': 'SMS Test',
-        'issue_summary': 'standard - Testing SMS only',
-        'urgency': 'standard'
-    }
+@app.route('/test-calendar', methods=['POST'])
+def test_calendar():
+    """Test Google Calendar integration"""
+    if not calendar_service:
+        return jsonify({
+            'status': 'error',
+            'message': 'Calendar service not initialized'
+        }), 500
     
-    sms_success = send_sms_notification(test_data)
-    
-    return jsonify({
-        'status': 'sms_test_complete',
-        'sms_sent': sms_success,
-        'recipients': [n.strip() for n in TECHNICIAN_PHONES if n.strip()]
-    }), 200
-
-@app.route('/test-albiware', methods=['POST'])
-def test_albiware():
-    """Test Albiware contact creation only"""
-    test_data = {
-        'first_name': 'Albiware',
-        'last_name': 'Test',
-        'phone_number': '555-ALBI',
-        'address': '456 Integration Ave, Las Vegas, NV 89102',
-        'referral_source': 'API Test',
-        'issue_summary': 'standard - Testing Albiware integration',
-        'urgency': 'standard'
-    }
-    
-    albiware_success = create_albiware_contact(test_data)
-    
-    return jsonify({
-        'status': 'albiware_test_complete',
-        'contact_created': albiware_success,
-        'data': test_data
-    }), 200
-
-@app.route('/debug', methods=['POST'])
-def debug_webhook():
-    """Debug endpoint to see raw webhook data"""
-    data = request.json
-    print("=" * 80)
-    print("DEBUG: Received webhook data:")
-    print(data)
-    print("=" * 80)
-    return jsonify({'status': 'debug', 'received': data}), 200
+    try:
+        # Test getting available slots
+        slots = get_available_slots(days_ahead=3)
+        
+        return jsonify({
+            'status': 'calendar_test_complete',
+            'calendar_configured': True,
+            'available_slots_count': len(slots),
+            'sample_slots': slots[:3]
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
