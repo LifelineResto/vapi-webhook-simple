@@ -433,10 +433,12 @@ def check_availability():
                 'result': "I apologize, but I'm having trouble accessing our calendar right now. Let me transfer you to someone who can help you schedule an appointment."
             }), 200
         
-        # Format slots for AI to read naturally
+        # Format slots for AI to read naturally with explicit datetime instructions
         slots_text = "Here are our next available appointment times:\n"
         for i, slot in enumerate(available_slots[:5], 1):  # Show first 5
-            slots_text += f"{i}. {slot['display']}\n"
+            slots_text += f"{i}. {slot['display']} (use datetime: {slot['datetime']})\n"
+        
+        slots_text += "\nWhen booking, use the EXACT datetime string shown in parentheses."
         
         return jsonify({
             'result': slots_text,
@@ -474,6 +476,9 @@ def book_appointment():
             'email': function_args.get('email', ''),
             'appointment_datetime': function_args.get('appointment_datetime', '')
         }
+        
+        print(f"📅 Appointment datetime received: {appointment_data['appointment_datetime']}")
+        print(f"📋 Full appointment data: {appointment_data}")
         
         # Create calendar event
         event = create_calendar_event(appointment_data)
