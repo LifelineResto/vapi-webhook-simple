@@ -1,6 +1,7 @@
 """
 Vapi AI to Google Sheets Webhook - Lifeline Restoration
 Handles EndOfCallReport webhooks from Vapi and logs lead data to Google Sheets via Apps Script
+FIXED VERSION - Correctly parses Vapi's actual webhook structure
 """
 
 from flask import Flask, request, jsonify
@@ -13,13 +14,17 @@ app = Flask(__name__)
 # Get Apps Script URL from environment variable
 APPS_SCRIPT_URL = os.environ.get('APPS_SCRIPT_URL', '')
 
+# Your structured output ID from Vapi
+STRUCTURED_OUTPUT_ID = '3da648d2-579b-4878-ace3-2c40f3fb3153'
+
 @app.route('/', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'service': 'Vapi Webhook - Lifeline Restoration',
+        'service': 'Vapi Webhook - Lifeline Restoration (FIXED)',
         'apps_script_configured': bool(APPS_SCRIPT_URL),
+        'structured_output_id': STRUCTURED_OUTPUT_ID,
         'timestamp': datetime.utcnow().isoformat()
     })
 
@@ -45,32 +50,40 @@ def webhook():
             }), 200
         
         # Extract structured outputs from the artifact
+        # Structure: message -> artifact -> structuredOutputs -> {ID} -> result
         artifact = data.get('message', {}).get('artifact', {})
         structured_outputs = artifact.get('structuredOutputs', {})
         
-        # Get the structured_output_data that we configured in Vapi
-        lead_data = structured_outputs.get('Structured_output_data', {})
+        # Get the structured output by ID
+        output_data = structured_outputs.get(STRUCTURED_OUTPUT_ID, {})
+        lead_data = output_data.get('result', {})
         
         if not lead_data:
             print("Warning: No structured output data found in webhook")
+            print(f"Available keys in structuredOutputs: {list(structured_outputs.keys())}")
             return jsonify({
                 'status': 'error',
-                'message': 'No structured output data found'
+                'message': 'No structured output data found',
+                'available_outputs': list(structured_outputs.keys())
             }), 400
         
         # Extract phone number from call data (fallback if not in structured output)
-        phone_call = data.get('message', {}).get('call', {})
-        customer_number = phone_call.get('customer', {}).get('number', '')
+        call_data = data.get('message', {}).get('call', {})
+        customer = call_data.get('customer', {})
+        customer_number = customer.get('number', '')
         
         # Map Vapi's field names to Google Sheets format
         sheet_data = {
             'first_name': lead_data.get('first_name', ''),
             'last_name': lead_data.get('last_name', ''),
-            'phone_number': lead_data.get('phone_number', customer_number),
+            'phone_number': lead_data.get('phone_number', '') or customer_number,
             'address': lead_data.get('property_address', ''),
             'referral_source': lead_data.get('referral_source', ''),
-            'issue_summary': f"{lead_data.get('urgency', '')} - {lead_data.get('damage_type', '')}"
+            'issue_summary': f"{lead_data.get('urgency', 'Standard')} - {lead_data.get('damage_type', 'Not specified')}"
         }
+        
+        # Log what we extracted
+        print(f"Extracted lead data: {sheet_data}")
         
         # Send to Google Sheets via Apps Script
         if APPS_SCRIPT_URL:
@@ -81,14 +94,14 @@ def webhook():
             )
             
             if response.status_code == 200:
-                print(f"Lead added to Google Sheets: {sheet_data['first_name']} {sheet_data['last_name']}")
+                print(f"✅ Lead added to Google Sheets: {sheet_data['first_name']} {sheet_data['last_name']}")
                 return jsonify({
                     'status': 'success',
                     'message': 'Lead data sent to Google Sheets',
                     'data': sheet_data
                 }), 200
             else:
-                print(f"Apps Script error: {response.status_code} - {response.text}")
+                print(f"❌ Apps Script error: {response.status_code} - {response.text}")
                 return jsonify({
                     'status': 'error',
                     'message': 'Failed to send to Google Sheets',
@@ -101,7 +114,9 @@ def webhook():
             }), 500
             
     except Exception as e:
-        print(f"Error processing webhook: {str(e)}")
+        print(f"❌ Error processing webhook: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'status': 'error',
             'message': str(e)
@@ -158,10 +173,19 @@ def debug_endpoint():
         print(data)
         print("========================")
         
+        # Also try to extract and show the structured output
+        message_type = data.get('message', {}).get('type', 'unknown')
+        if message_type == 'end-of-call-report':
+            artifact = data.get('message', {}).get('artifact', {})
+            structured_outputs = artifact.get('structuredOutputs', {})
+            print("\n=== STRUCTURED OUTPUTS ===")
+            print(structured_outputs)
+            print("==========================")
+        
         return jsonify({
             'status': 'received',
             'message': 'Webhook data logged to console',
-            'data': data
+            'type': message_type
         }), 200
     except Exception as e:
         return jsonify({
