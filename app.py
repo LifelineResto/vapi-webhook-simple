@@ -1,155 +1,107 @@
 """
-Vapi AI Webhook Integration for Lifeline Restoration
-Simplified version using Google Apps Script proxy (NO CREDENTIALS NEEDED!)
+Vapi AI to Google Sheets Webhook - Lifeline Restoration
+Handles EndOfCallReport webhooks from Vapi and logs lead data to Google Sheets via Apps Script
 """
 
-import os
-import json
-from datetime import datetime
 from flask import Flask, request, jsonify
 import requests
+import os
+from datetime import datetime
 
 app = Flask(__name__)
 
-# Configuration - set this in Railway environment variables
-APPS_SCRIPT_URL = os.getenv('APPS_SCRIPT_URL', '')
-
-def append_to_sheet(data):
-    """Send lead data to Google Apps Script proxy"""
-    try:
-        if not APPS_SCRIPT_URL:
-            print("ERROR: APPS_SCRIPT_URL not set in environment variables")
-            return False
-        
-        # Send data to Apps Script
-        response = requests.post(
-            APPS_SCRIPT_URL,
-            json=data,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            print(f"Successfully added lead: {result}")
-            return True
-        else:
-            print(f"Error from Apps Script: {response.status_code} - {response.text}")
-            return False
-        
-    except Exception as e:
-        print(f"Error sending to Apps Script: {e}")
-        return False
-
-def extract_lead_data(vapi_payload):
-    """Extract lead information from Vapi webhook payload"""
-    extracted_data = {
-        'first_name': '',
-        'last_name': '',
-        'phone_number': '',
-        'address': '',
-        'referral_source': '',
-        'issue_summary': ''
-    }
-    
-    try:
-        # Extract from call data
-        call = vapi_payload.get('call', {})
-        customer = call.get('customer', {})
-        
-        # Get phone number
-        extracted_data['phone_number'] = (
-            customer.get('number', '') or 
-            call.get('phoneNumber', '') or 
-            call.get('phoneNumberE164', '')
-        )
-        
-        # Extract from analysis
-        analysis = vapi_payload.get('analysis', {})
-        
-        if analysis:
-            structured_data = analysis.get('structuredData', {})
-            extracted_data['first_name'] = structured_data.get('firstName', '')
-            extracted_data['last_name'] = structured_data.get('lastName', '')
-            extracted_data['address'] = structured_data.get('address', '')
-            extracted_data['referral_source'] = structured_data.get('referralSource', '')
-            extracted_data['issue_summary'] = (
-                structured_data.get('issueSummary', '') or 
-                analysis.get('summary', '')
-            )
-        
-        # Fallback to transcript
-        if not extracted_data['issue_summary']:
-            transcript = vapi_payload.get('transcript', '')
-            if transcript:
-                extracted_data['issue_summary'] = transcript[:500]
-        
-        # Try to extract name from customer
-        if not extracted_data['first_name'] and customer.get('name'):
-            name_parts = customer.get('name', '').split()
-            extracted_data['first_name'] = name_parts[0] if name_parts else ''
-            if len(name_parts) > 1:
-                extracted_data['last_name'] = ' '.join(name_parts[1:])
-        
-    except Exception as e:
-        print(f"Error extracting lead data: {e}")
-    
-    return extracted_data
+# Get Apps Script URL from environment variable
+APPS_SCRIPT_URL = os.environ.get('APPS_SCRIPT_URL', '')
 
 @app.route('/', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'service': 'Vapi Webhook - Lifeline Restoration (Simple)',
+        'service': 'Vapi Webhook - Lifeline Restoration',
         'apps_script_configured': bool(APPS_SCRIPT_URL),
-        'timestamp': datetime.now().isoformat()
+        'timestamp': datetime.utcnow().isoformat()
     })
 
 @app.route('/webhook', methods=['POST'])
-def vapi_webhook():
-    """Main webhook endpoint for Vapi AI"""
+def webhook():
+    """
+    Main webhook endpoint for Vapi
+    Receives EndOfCallReport with structured outputs and sends to Google Sheets
+    """
     try:
-        payload = request.get_json()
+        # Get the webhook data from Vapi
+        data = request.json
         
-        if not payload:
-            return jsonify({'error': 'No payload received'}), 400
+        # Log the webhook type for debugging
+        message_type = data.get('message', {}).get('type', 'unknown')
+        print(f"Received webhook: {message_type}")
         
-        print(f"Received webhook event: {payload.get('type', 'unknown')}")
+        # We only process end-of-call-report messages
+        if message_type != 'end-of-call-report':
+            return jsonify({
+                'status': 'ignored',
+                'message': f'Webhook type {message_type} not processed'
+            }), 200
         
-        # Check event type
-        event_type = payload.get('type', '')
+        # Extract structured outputs from the artifact
+        artifact = data.get('message', {}).get('artifact', {})
+        structured_outputs = artifact.get('structuredOutputs', {})
         
-        # Process end-of-call events
-        if event_type in ['end-of-call-report', 'call-ended', 'call.ended']:
-            # Extract lead data
-            lead_data = extract_lead_data(payload)
+        # Get the structured_output_data that we configured in Vapi
+        lead_data = structured_outputs.get('Structured_output_data', {})
+        
+        if not lead_data:
+            print("Warning: No structured output data found in webhook")
+            return jsonify({
+                'status': 'error',
+                'message': 'No structured output data found'
+            }), 400
+        
+        # Extract phone number from call data (fallback if not in structured output)
+        phone_call = data.get('message', {}).get('call', {})
+        customer_number = phone_call.get('customer', {}).get('number', '')
+        
+        # Map Vapi's field names to Google Sheets format
+        sheet_data = {
+            'first_name': lead_data.get('first_name', ''),
+            'last_name': lead_data.get('last_name', ''),
+            'phone_number': lead_data.get('phone_number', customer_number),
+            'address': lead_data.get('property_address', ''),
+            'referral_source': lead_data.get('referral_source', ''),
+            'issue_summary': f"{lead_data.get('urgency', '')} - {lead_data.get('damage_type', '')}"
+        }
+        
+        # Send to Google Sheets via Apps Script
+        if APPS_SCRIPT_URL:
+            response = requests.post(
+                APPS_SCRIPT_URL,
+                json=sheet_data,
+                timeout=10
+            )
             
-            print(f"Extracted lead data: {json.dumps(lead_data, indent=2)}")
-            
-            # Send to Google Sheets via Apps Script
-            success = append_to_sheet(lead_data)
-            
-            if success:
+            if response.status_code == 200:
+                print(f"Lead added to Google Sheets: {sheet_data['first_name']} {sheet_data['last_name']}")
                 return jsonify({
                     'status': 'success',
-                    'message': 'Lead data saved to Google Sheet',
-                    'data': lead_data
+                    'message': 'Lead data sent to Google Sheets',
+                    'data': sheet_data
                 }), 200
             else:
+                print(f"Apps Script error: {response.status_code} - {response.text}")
                 return jsonify({
                     'status': 'error',
-                    'message': 'Failed to save to Google Sheet'
+                    'message': 'Failed to send to Google Sheets',
+                    'apps_script_response': response.text
                 }), 500
         else:
-            # Acknowledge other events
             return jsonify({
-                'status': 'received',
-                'message': f'Event type {event_type} acknowledged'
-            }), 200
+                'status': 'error',
+                'message': 'APPS_SCRIPT_URL not configured'
+            }), 500
             
     except Exception as e:
-        print(f"Error processing webhook: {e}")
+        print(f"Error processing webhook: {str(e)}")
         return jsonify({
             'status': 'error',
             'message': str(e)
@@ -157,33 +109,36 @@ def vapi_webhook():
 
 @app.route('/test', methods=['POST'])
 def test_endpoint():
-    """Test endpoint to manually add a lead"""
+    """
+    Test endpoint to manually add a lead to Google Sheets
+    """
     try:
-        data = request.get_json()
+        test_data = {
+            'first_name': 'Test',
+            'last_name': 'Customer',
+            'phone_number': '555-0123',
+            'address': '123 Test Street, Las Vegas, NV 89101',
+            'referral_source': 'Manual Test',
+            'issue_summary': 'Standard - Water damage test'
+        }
         
-        if not data:
-            # Use sample data
-            data = {
-                'first_name': 'Test',
-                'last_name': 'User',
-                'phone_number': '555-0000',
-                'address': '123 Test St',
-                'referral_source': 'Manual Test',
-                'issue_summary': 'Testing webhook integration'
-            }
-        
-        success = append_to_sheet(data)
-        
-        if success:
+        if APPS_SCRIPT_URL:
+            response = requests.post(
+                APPS_SCRIPT_URL,
+                json=test_data,
+                timeout=10
+            )
+            
             return jsonify({
                 'status': 'success',
-                'message': 'Test lead added',
-                'data': data
+                'message': 'Test lead sent to Google Sheets',
+                'data': test_data,
+                'apps_script_response': response.json() if response.status_code == 200 else response.text
             }), 200
         else:
             return jsonify({
                 'status': 'error',
-                'message': 'Failed to add test lead'
+                'message': 'APPS_SCRIPT_URL not configured'
             }), 500
             
     except Exception as e:
@@ -192,6 +147,28 @@ def test_endpoint():
             'message': str(e)
         }), 500
 
+@app.route('/debug', methods=['POST'])
+def debug_endpoint():
+    """
+    Debug endpoint to see the raw webhook data from Vapi
+    """
+    try:
+        data = request.json
+        print("=== RAW WEBHOOK DATA ===")
+        print(data)
+        print("========================")
+        
+        return jsonify({
+            'status': 'received',
+            'message': 'Webhook data logged to console',
+            'data': data
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
