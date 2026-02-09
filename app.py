@@ -1,4 +1,4 @@
-# Version: 2026-02-09 with SMS + Albiware Contact + Google Calendar + Albiware Calendar Events
+# Version: 2026-02-09 - Added customer SMS confirmation
 
 from flask import Flask, request, jsonify
 import requests
@@ -175,6 +175,34 @@ Booked via Vapi AI Assistant""",
             
     except Exception as e:
         print(f"❌ Error creating Albiware calendar event: {e}")
+        return False
+
+def send_customer_sms(customer_data):
+    """Send appointment confirmation SMS directly to the customer"""
+    if not twilio_client or not TWILIO_PHONE_NUMBER:
+        print("⚠️ SMS not configured - skipping customer notification")
+        return False
+    
+    customer_phone = customer_data.get('phone_number', '')
+    if not customer_phone:
+        print("⚠️ No customer phone number provided")
+        return False
+    
+    customer_name = f"{customer_data.get('first_name', '')} {customer_data.get('last_name', '')}".strip()
+    appointment_time = customer_data.get('appointment_datetime', '')
+    
+    message_body = f"""Hi {customer_name}! Your Lifeline Restoration appointment is confirmed for {appointment_time}. We'll see you then! Reply STOP to unsubscribe."""
+    
+    try:
+        message = twilio_client.messages.create(
+            body=message_body,
+            from_=TWILIO_PHONE_NUMBER,
+            to=customer_phone
+        )
+        print(f"✅ Customer SMS sent to {customer_phone}: {message.sid}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to send customer SMS to {customer_phone}: {e}")
         return False
 
 def create_albiware_contact(lead_data):
@@ -680,8 +708,6 @@ def book_appointment():
                 appt_dt = datetime.fromisoformat(appointment_data['appointment_datetime'].replace('Z', '+00:00'))
                 # Format as MM/DD/YYYY HH:MM a.m./p.m.
                 display_time = appt_dt.strftime('%m/%d/%Y %I:%M %p').lower().replace('am', 'a.m.').replace('pm', 'p.m.')
-
-
             except:
                 display_time = appointment_data['appointment_datetime']
         else:
@@ -698,8 +724,13 @@ def book_appointment():
             'urgency': appointment_data['urgency'],
             'appointment_datetime': display_time
         }
+        # Send SMS to technician
         send_sms_notification(sms_data, message_type='appointment')
-        print(f"✅ SMS confirmation sent for appointment at {display_time}")
+        print(f"✅ Technician SMS sent for appointment at {display_time}")
+        
+        # Send SMS to customer
+        send_customer_sms(sms_data)
+        print(f"✅ Customer SMS sent for appointment at {display_time}")
         
         result_text = f"Confirmation sent! You'll receive a text message shortly with all the appointment details."
         
