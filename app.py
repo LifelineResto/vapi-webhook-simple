@@ -13,6 +13,9 @@ import pytz
 
 app = Flask(__name__)
 
+# In-memory storage for appointment data (keyed by call ID)
+appointment_storage = {}
+
 # Google Sheets configuration
 APPS_SCRIPT_URL = os.environ.get('APPS_SCRIPT_URL', '')
 STRUCTURED_OUTPUT_ID = '3da648d2-579b-4878-ace3-2c40f3fb3153'
@@ -509,11 +512,16 @@ def webhook():
             return jsonify({'status': 'error', 'message': 'No structured output data found'}), 400
         
         customer_number = data.get('message', {}).get('call', {}).get('customer', {}).get('number', '')
+        call_id = data.get('message', {}).get('call', {}).get('id', '')
         
-        # Format appointment datetime if present
-        appointment_datetime_raw = lead_data.get('appointment_datetime', '')
-        appointment_datetime_formatted = ''
-        if appointment_datetime_raw:
+        # Check if appointment was stored during bookAppointment call
+        stored_appointment = appointment_storage.get(call_id, {})
+        
+        # Format appointment datetime if present (prefer stored data over structured output)
+        appointment_datetime_raw = stored_appointment.get('appointment_datetime', '') or lead_data.get('appointment_datetime', '')
+        appointment_datetime_formatted = stored_appointment.get('appointment_datetime_formatted', '')
+        
+        if appointment_datetime_raw and not appointment_datetime_formatted:
             try:
                 appt_dt = datetime.fromisoformat(appointment_datetime_raw.replace('Z', '+00:00'))
                 # Format as MM/DD/YYYY HH:MM a.m./p.m.
@@ -582,6 +590,11 @@ def webhook():
                 print(f"❌ Failed to create Albiware calendar event")
         else:
             print(f"ℹ️ No appointment scheduled, skipping calendar event creation")
+        
+        # Clean up stored appointment data
+        if call_id and call_id in appointment_storage:
+            del appointment_storage[call_id]
+            print(f"🗑️ Cleaned up appointment storage for call {call_id}")
         
         return jsonify({
             'status': 'success',
@@ -741,6 +754,15 @@ def book_appointment():
             'urgency': appointment_data['urgency'],
             'appointment_datetime': display_time
         }
+        # Store appointment datetime for end-of-call webhook (keyed by call ID)
+        call_id = data.get('message', {}).get('call', {}).get('id', '')
+        if call_id:
+            appointment_storage[call_id] = {
+                'appointment_datetime': appointment_data['appointment_datetime'],
+                'appointment_datetime_formatted': display_time
+            }
+            print(f"💾 Stored appointment data for call {call_id}")
+        
         # Send SMS to customer only (technician gets SMS at end-of-call with all data)
         send_customer_sms(sms_data)
         print(f"✅ Customer SMS sent for appointment at {display_time}")
