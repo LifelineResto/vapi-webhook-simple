@@ -551,15 +551,15 @@ def webhook():
         # Create calendar event if appointment was scheduled
         calendar_success = False
         albiware_calendar_success = False
-        if sheet_data.get('appointment_datetime'):
-            print(f"📅 Creating calendar events for appointment: {sheet_data['appointment_datetime']}")
+        if appointment_datetime_raw:  # Use raw ISO format for calendar functions
+            print(f"📅 Creating calendar events for appointment: {appointment_datetime_formatted}")
             calendar_data = {
                 'customer_name': f"{sheet_data['first_name']} {sheet_data['last_name']}",
                 'phone': sheet_data['phone_number'],
                 'address': sheet_data['address'],
                 'damage_type': lead_data.get('damage_type', 'Not specified'),
                 'urgency': sheet_data['urgency'],
-                'appointment_datetime': sheet_data['appointment_datetime']
+                'appointment_datetime': appointment_datetime_raw  # Pass raw ISO format to calendar functions
             }
             
             # Create Google Calendar event
