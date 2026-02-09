@@ -149,7 +149,9 @@ Booked via Vapi AI Assistant""",
             'state': address_parts['state'],
             'zipCode': address_parts['zipCode'],
             'isAllDay': False,
-            'sendInvite': True
+            'sendInvite': True,
+            'required': 'Alan Potter, Rodolfo Arceo',
+            'status': 'Confirmed'
         }
         
         headers = {
