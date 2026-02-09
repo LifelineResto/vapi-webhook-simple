@@ -626,7 +626,9 @@ def check_availability():
         if tool_call_list:
             tool_call = tool_call_list[0]
             tool_call_id = tool_call.get('id', 'unknown')
-            arguments = tool_call.get('arguments', {})
+            # Arguments are nested inside 'function' object in toolCallList format
+            function_obj = tool_call.get('function', {})
+            arguments = function_obj.get('arguments', {})
         else:
             # Fallback to old format (functionCall)
             function_call = message.get('functionCall', {})
@@ -634,7 +636,7 @@ def check_availability():
                 print("❌ No toolCallList or functionCall in request")
                 return jsonify({'error': 'Invalid request format'}), 400
             
-            tool_call_id = 'function-call'  # Old format doesn't have IDs
+            tool_call_id = 'function-call'
             arguments = function_call.get('parameters', {})
         
         customer_address = arguments.get('customer_address', 'Not provided')
@@ -699,7 +701,9 @@ def book_appointment():
         if tool_call_list:
             tool_call = tool_call_list[0]
             tool_call_id = tool_call.get('id', 'unknown')
-            function_args = tool_call.get('arguments', {})
+            # Arguments are nested inside 'function' object in toolCallList format
+            function_obj = tool_call.get('function', {})
+            function_args = function_obj.get('arguments', {})
         else:
             # Fallback to old format (functionCall)
             function_call = message.get('functionCall', {})
