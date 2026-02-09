@@ -520,7 +520,9 @@ def check_availability():
 
 @app.route('/book-appointment', methods=['POST'])
 def book_appointment():
-    """Vapi tool: Book an appointment"""
+    """Vapi tool: Send SMS and update systems after appointment is booked
+    NOTE: Calendar event creation is handled by Vapi's native google_calendar_tool
+    """
     tool_call_id = 'unknown'
     try:
         data = request.json
@@ -565,30 +567,34 @@ def book_appointment():
         print(f"📅 Appointment datetime: {appointment_data['appointment_datetime']}")
         print(f"📝 Function args received: {json.dumps(function_args, indent=2)[:500]}")
         
-        # Create calendar event
-        event = create_calendar_event(appointment_data)
+        # NOTE: Calendar event creation is now handled by Vapi's native google_calendar_tool
+        # This endpoint only handles SMS confirmation and internal system updates
         
-        if event:
-            # Parse appointment time for display
-            appt_dt = datetime.fromisoformat(appointment_data['appointment_datetime'].replace('Z', '+00:00'))
-            display_time = appt_dt.strftime('%A, %B %d at %I:%M %p')
-            
-            # Send SMS confirmation
-            name_parts = appointment_data['customer_name'].split()
-            sms_data = {
-                'first_name': name_parts[0] if name_parts else '',
-                'last_name': ' '.join(name_parts[1:]) if len(name_parts) > 1 else '',
-                'phone_number': appointment_data['phone'],
-                'address': appointment_data['address'],
-                'issue_summary': f"{appointment_data['damage_type']} - {appointment_data['urgency']}",
-                'urgency': appointment_data['urgency'],
-                'appointment_datetime': display_time
-            }
-            send_sms_notification(sms_data, message_type='appointment')
-            
-            result_text = f"Perfect! Your appointment is confirmed for {display_time}. You'll receive a confirmation text shortly with all the details."
+        # Parse appointment time for display
+        if appointment_data['appointment_datetime']:
+            try:
+                appt_dt = datetime.fromisoformat(appointment_data['appointment_datetime'].replace('Z', '+00:00'))
+                display_time = appt_dt.strftime('%A, %B %d at %I:%M %p')
+            except:
+                display_time = appointment_data['appointment_datetime']
         else:
-            result_text = "I apologize, but I wasn't able to book that appointment. Let me transfer you to our scheduling team who can help you."
+            display_time = "your scheduled time"
+        
+        # Send SMS confirmation
+        name_parts = appointment_data['customer_name'].split()
+        sms_data = {
+            'first_name': name_parts[0] if name_parts else '',
+            'last_name': ' '.join(name_parts[1:]) if len(name_parts) > 1 else '',
+            'phone_number': appointment_data['phone'],
+            'address': appointment_data['address'],
+            'issue_summary': f"{appointment_data['damage_type']} - {appointment_data['urgency']}",
+            'urgency': appointment_data['urgency'],
+            'appointment_datetime': display_time
+        }
+        send_sms_notification(sms_data, message_type='appointment')
+        print(f"✅ SMS confirmation sent for appointment at {display_time}")
+        
+        result_text = f"Confirmation sent! You'll receive a text message shortly with all the appointment details."
         
         # CORRECT Vapi response format
         return jsonify({
