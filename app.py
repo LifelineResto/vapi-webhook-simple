@@ -436,12 +436,34 @@ def webhook():
         # Send SMS notification
         sms_success = send_sms_notification(sheet_data)
         
+        # Create calendar event if appointment was scheduled
+        calendar_success = False
+        if sheet_data.get('appointment_datetime'):
+            print(f"📅 Creating calendar event for appointment: {sheet_data['appointment_datetime']}")
+            calendar_data = {
+                'customer_name': f"{sheet_data['first_name']} {sheet_data['last_name']}",
+                'phone': sheet_data['phone_number'],
+                'address': sheet_data['address'],
+                'damage_type': lead_data.get('damage_type', 'Not specified'),
+                'urgency': sheet_data['urgency'],
+                'appointment_datetime': sheet_data['appointment_datetime']
+            }
+            event = create_calendar_event(calendar_data)
+            if event:
+                calendar_success = True
+                print(f"✅ Calendar event created successfully")
+            else:
+                print(f"❌ Failed to create calendar event")
+        else:
+            print(f"ℹ️ No appointment scheduled, skipping calendar event creation")
+        
         return jsonify({
             'status': 'success',
             'data': sheet_data,
             'sheets_updated': sheets_success,
             'albiware_contact_created': albiware_success,
-            'sms_sent': sms_success
+            'sms_sent': sms_success,
+            'calendar_event_created': calendar_success
         }), 200
             
     except Exception as e:
