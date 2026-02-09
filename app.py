@@ -178,8 +178,10 @@ Appointment: {appointment_time}
 
 Booked: {get_pacific_time().strftime('%I:%M %p PT')}"""
     else:
-        # Regular lead notification
-        message_body = f"""{emoji} NEW LEAD - Lifeline Restoration
+        # Regular lead notification (check if appointment was booked)
+        appointment_time = lead_data.get('appointment_datetime', '')
+        if appointment_time:
+            message_body = f"""{emoji} NEW LEAD + APPOINTMENT - Lifeline Restoration
 
 Name: {lead_data.get('first_name', '')} {lead_data.get('last_name', '')}
 Phone: {lead_data.get('phone_number', 'Not provided')}
@@ -187,7 +189,19 @@ Address: {lead_data.get('address', 'Not provided')}
 Issue: {lead_data.get('issue_summary', 'Not specified')}
 Source: {lead_data.get('referral_source', 'Unknown')}
 
-Time: {get_pacific_time().strftime('%I:%M %p PT')}"""
+📅 APPOINTMENT: {appointment_time}
+
+Received: {get_pacific_time().strftime('%I:%M %p PT')}"""
+        else:
+            message_body = f"""{emoji} NEW LEAD - Lifeline Restoration
+
+Name: {lead_data.get('first_name', '')} {lead_data.get('last_name', '')}
+Phone: {lead_data.get('phone_number', 'Not provided')}
+Address: {lead_data.get('address', 'Not provided')}
+Issue: {lead_data.get('issue_summary', 'Not specified')}
+Source: {lead_data.get('referral_source', 'Unknown')}
+
+Received: {get_pacific_time().strftime('%I:%M %p PT')}"""
     
     success_count = 0
     for phone_number in TECHNICIAN_PHONES:
@@ -384,8 +398,9 @@ def webhook():
             'phone_number': lead_data.get('phone_number', '') or customer_number,
             'address': lead_data.get('property_address', ''),
             'referral_source': lead_data.get('referral_source', ''),
-            'issue_summary': f"{lead_data.get('urgency', 'standard')} - {lead_data.get('damage_type', 'Not specified')}",
-            'urgency': lead_data.get('urgency', 'standard')
+            'issue_summary': lead_data.get('issue_summary', '') or lead_data.get('issueSummary', '') or f"{lead_data.get('urgency', 'standard')} - {lead_data.get('damage_type', 'Not specified')}",
+            'urgency': lead_data.get('urgency', 'standard'),
+            'appointment_datetime': lead_data.get('appointment_datetime', '')
         }
         
         print(f"Extracted lead data: {sheet_data}")
