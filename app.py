@@ -150,7 +150,7 @@ Booked via Vapi AI Assistant""",
             'zipCode': address_parts['zipCode'],
             'isAllDay': False,
             'sendInvite': True,
-            'required': 'Alan Potter, Rodolfo Arceo',
+            'requiredAttendees': ['alan@lifelinerestorations.com', 'rodolfo@lifelinerestorations.com'],
             'status': 'Confirmed'
         }
         
@@ -189,6 +189,10 @@ def send_customer_sms(customer_data):
     if not customer_phone:
         print("⚠️ No customer phone number provided")
         return False
+    
+    # Add +1 prefix if not present (Twilio requires E.164 format)
+    if not customer_phone.startswith('+'):
+        customer_phone = f'+1{customer_phone}'
     
     customer_name = f"{customer_data.get('first_name', '')} {customer_data.get('last_name', '')}".strip()
     appointment_time = customer_data.get('appointment_datetime', '')
