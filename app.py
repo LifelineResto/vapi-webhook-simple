@@ -745,10 +745,16 @@ def book_appointment():
         
         # Send SMS confirmation
         name_parts = appointment_data['customer_name'].split()
+        
+        # Ensure phone has +1 prefix for Twilio E.164 format
+        customer_phone = appointment_data['phone']
+        if not customer_phone.startswith('+'):
+            customer_phone = f'+1{customer_phone}'
+        
         sms_data = {
             'first_name': name_parts[0] if name_parts else '',
             'last_name': ' '.join(name_parts[1:]) if len(name_parts) > 1 else '',
-            'phone_number': appointment_data['phone'],
+            'phone_number': customer_phone,  # Fixed: was 'phone', now 'phone_number'
             'address': appointment_data['address'],
             'issue_summary': f"{appointment_data['damage_type']} - {appointment_data['urgency']}",
             'urgency': appointment_data['urgency'],
@@ -764,8 +770,11 @@ def book_appointment():
             print(f"💾 Stored appointment data for call {call_id}")
         
         # Send SMS to customer only (technician gets SMS at end-of-call with all data)
-        send_customer_sms(sms_data)
-        print(f"✅ Customer SMS sent for appointment at {display_time}")
+        sms_sent = send_customer_sms(sms_data)
+        if sms_sent:
+            print(f"✅ Customer SMS sent successfully to {customer_phone} for appointment at {display_time}")
+        else:
+            print(f"⚠️ Customer SMS failed to send to {customer_phone}")
         
         result_text = f"Confirmation sent! You'll receive a text message shortly with all the appointment details."
         
