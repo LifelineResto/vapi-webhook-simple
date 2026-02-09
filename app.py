@@ -547,10 +547,14 @@ def webhook():
         sheets_success = False
         if APPS_SCRIPT_URL:
             try:
+                print(f"📤 Sending to Google Sheets: {json.dumps(sheet_data, indent=2)}")
                 response = requests.post(APPS_SCRIPT_URL, json=sheet_data, timeout=10)
+                print(f"📥 Google Sheets response: {response.status_code} - {response.text[:200]}")
                 if response.status_code == 200:
                     print(f"✅ Lead added to Google Sheets")
                     sheets_success = True
+                else:
+                    print(f"⚠️ Google Sheets returned status {response.status_code}")
             except Exception as e:
                 print(f"❌ Error sending to Google Sheets: {e}")
         
