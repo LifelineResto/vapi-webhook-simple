@@ -678,7 +678,10 @@ def book_appointment():
         if appointment_data['appointment_datetime']:
             try:
                 appt_dt = datetime.fromisoformat(appointment_data['appointment_datetime'].replace('Z', '+00:00'))
-                display_time = appt_dt.strftime('%A, %B %d at %I:%M %p')
+                # Format as MM/DD/YYYY HH:MM a.m./p.m.
+                display_time = appt_dt.strftime('%m/%d/%Y %I:%M %p').lower().replace('am', 'a.m.').replace('pm', 'p.m.')
+
+
             except:
                 display_time = appointment_data['appointment_datetime']
         else:
