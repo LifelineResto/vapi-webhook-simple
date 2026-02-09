@@ -1,4 +1,4 @@
-# Version: 2026-02-08 with SMS + Albiware + Google Calendar Appointments
+# Version: 2026-02-09 with SMS + Albiware Contact + Google Calendar + Albiware Calendar Events
 
 from flask import Flask, request, jsonify
 import requests
@@ -105,6 +105,77 @@ def parse_address(address_string):
         print(f"⚠️ Error parsing address: {e}")
     
     return address_parts
+
+def create_albiware_calendar_event(appointment_data):
+    """Create a calendar event in Albiware Scheduler"""
+    if not ALBIWARE_API_KEY:
+        print("⚠️ Albiware API key not configured - skipping calendar event creation")
+        return False
+    
+    try:
+        # Parse the appointment datetime
+        appointment_dt = datetime.fromisoformat(appointment_data['appointment_datetime'].replace('Z', '+00:00'))
+        pacific_tz = pytz.timezone('America/Los_Angeles')
+        
+        # Convert to Pacific time if needed
+        if appointment_dt.tzinfo is None:
+            appointment_dt = pacific_tz.localize(appointment_dt)
+        else:
+            appointment_dt = appointment_dt.astimezone(pacific_tz)
+        
+        end_dt = appointment_dt + timedelta(minutes=APPOINTMENT_DURATION_MINUTES)
+        
+        # Format datetimes for Albiware (ISO 8601 without timezone)
+        start_str = appointment_dt.strftime('%Y-%m-%dT%H:%M:%S')
+        end_str = end_dt.strftime('%Y-%m-%dT%H:%M:%S')
+        
+        # Parse address
+        address_parts = parse_address(appointment_data.get('address', ''))
+        
+        # Prepare event data
+        event_data = {
+            'title': f"Initial Assessment - {appointment_data.get('customer_name', 'Customer')}",
+            'start': start_str,
+            'startTimezone': 'Pacific Standard Time',
+            'end': end_str,
+            'endTimezone': 'Pacific Standard Time',
+            'notes': f"""Customer: {appointment_data.get('customer_name', '')}
+Phone: {appointment_data.get('phone', '')}
+Issue: {appointment_data.get('damage_type', '')} - {appointment_data.get('urgency', '')}
+
+Booked via Vapi AI Assistant""",
+            'address1': address_parts['address1'],
+            'city': address_parts['city'],
+            'state': address_parts['state'],
+            'zipCode': address_parts['zipCode'],
+            'isAllDay': False,
+            'sendInvite': True
+        }
+        
+        headers = {
+            'accept': 'application/json',
+            'content-type': 'application/json',
+            'ApiKey': ALBIWARE_API_KEY
+        }
+        
+        response = requests.post(
+            f'{ALBIWARE_BASE_URL}/Schedule/CreateEvent',
+            json=event_data,
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            print(f"✅ Calendar event created in Albiware: {appointment_data.get('customer_name', 'Customer')} - {appointment_dt.strftime('%m/%d/%Y %I:%M %p')}")
+            return True
+        else:
+            print(f"❌ Failed to create Albiware calendar event: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error creating Albiware calendar event: {e}")
+        return False
 
 def create_albiware_contact(lead_data):
     """Create a contact in Albiware"""
@@ -438,8 +509,9 @@ def webhook():
         
         # Create calendar event if appointment was scheduled
         calendar_success = False
+        albiware_calendar_success = False
         if sheet_data.get('appointment_datetime'):
-            print(f"📅 Creating calendar event for appointment: {sheet_data['appointment_datetime']}")
+            print(f"📅 Creating calendar events for appointment: {sheet_data['appointment_datetime']}")
             calendar_data = {
                 'customer_name': f"{sheet_data['first_name']} {sheet_data['last_name']}",
                 'phone': sheet_data['phone_number'],
@@ -448,12 +520,21 @@ def webhook():
                 'urgency': sheet_data['urgency'],
                 'appointment_datetime': sheet_data['appointment_datetime']
             }
+            
+            # Create Google Calendar event
             event = create_calendar_event(calendar_data)
             if event:
                 calendar_success = True
-                print(f"✅ Calendar event created successfully")
+                print(f"✅ Google Calendar event created successfully")
             else:
-                print(f"❌ Failed to create calendar event")
+                print(f"❌ Failed to create Google Calendar event")
+            
+            # Create Albiware Calendar event
+            albiware_calendar_success = create_albiware_calendar_event(calendar_data)
+            if albiware_calendar_success:
+                print(f"✅ Albiware calendar event created successfully")
+            else:
+                print(f"❌ Failed to create Albiware calendar event")
         else:
             print(f"ℹ️ No appointment scheduled, skipping calendar event creation")
         
@@ -463,7 +544,8 @@ def webhook():
             'sheets_updated': sheets_success,
             'albiware_contact_created': albiware_success,
             'sms_sent': sms_success,
-            'calendar_event_created': calendar_success
+            'google_calendar_event_created': calendar_success,
+            'albiware_calendar_event_created': albiware_calendar_success
         }), 200
             
     except Exception as e:
