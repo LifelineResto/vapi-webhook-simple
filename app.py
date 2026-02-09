@@ -525,6 +525,7 @@ def book_appointment():
     try:
         data = request.json
         print(f"📅 Book appointment request received")
+        print(f"📝 FULL REQUEST BODY: {json.dumps(data, indent=2)[:2000]}")
         
         # Extract data from Vapi request (handles both function-call and tool-call formats)
         message = data.get('message', {})
@@ -562,6 +563,7 @@ def book_appointment():
         }
         
         print(f"📅 Appointment datetime: {appointment_data['appointment_datetime']}")
+        print(f"📝 Function args received: {json.dumps(function_args, indent=2)[:500]}")
         
         # Create calendar event
         event = create_calendar_event(appointment_data)
