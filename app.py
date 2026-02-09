@@ -724,11 +724,7 @@ def book_appointment():
             'urgency': appointment_data['urgency'],
             'appointment_datetime': display_time
         }
-        # Send SMS to technician
-        send_sms_notification(sms_data, message_type='appointment')
-        print(f"✅ Technician SMS sent for appointment at {display_time}")
-        
-        # Send SMS to customer
+        # Send SMS to customer only (technician gets SMS at end-of-call with all data)
         send_customer_sms(sms_data)
         print(f"✅ Customer SMS sent for appointment at {display_time}")
         
