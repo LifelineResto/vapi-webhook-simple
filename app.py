@@ -46,7 +46,7 @@ BUSINESS_HOURS = {
 # Fix Monday
 BUSINESS_HOURS[0] = {'start': 8, 'end': 18}  # Monday
 
-APPOINTMENT_DURATION_MINUTES = 60  # 1 hour appointments
+APPOINTMENT_DURATION_MINUTES = 120  # 2 hour appointments
 
 # Initialize Twilio client
 twilio_client = None
@@ -504,6 +504,17 @@ def webhook():
         
         customer_number = data.get('message', {}).get('call', {}).get('customer', {}).get('number', '')
         
+        # Format appointment datetime if present
+        appointment_datetime_raw = lead_data.get('appointment_datetime', '')
+        appointment_datetime_formatted = ''
+        if appointment_datetime_raw:
+            try:
+                appt_dt = datetime.fromisoformat(appointment_datetime_raw.replace('Z', '+00:00'))
+                # Format as MM/DD/YYYY HH:MM a.m./p.m.
+                appointment_datetime_formatted = appt_dt.strftime('%m/%d/%Y %I:%M %p').lower().replace('am', 'a.m.').replace('pm', 'p.m.')
+            except:
+                appointment_datetime_formatted = appointment_datetime_raw
+        
         # Map Vapi field names
         sheet_data = {
             'first_name': lead_data.get('first_name', ''),
@@ -513,7 +524,7 @@ def webhook():
             'referral_source': lead_data.get('referral_source', ''),
             'issue_summary': lead_data.get('issue_summary', '') or lead_data.get('issueSummary', '') or f"{lead_data.get('urgency', 'standard')} - {lead_data.get('damage_type', 'Not specified')}",
             'urgency': lead_data.get('urgency', 'standard'),
-            'appointment_datetime': lead_data.get('appointment_datetime', '')
+            'appointment_datetime': appointment_datetime_formatted
         }
         
         print(f"Extracted lead data: {sheet_data}")
