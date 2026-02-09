@@ -422,46 +422,103 @@ def webhook():
 @app.route('/check-availability', methods=['POST'])
 def check_availability():
     """Vapi tool: Check available appointment slots"""
+    tool_call_id = 'unknown'
     try:
         data = request.json
-        print(f"Check availability request: {data}")
+        print(f"✅ Check availability request received")
+        print(f"📋 Full request data: {json.dumps(data, indent=2)}")
+        
+        # Extract data from Vapi request (handles both function-call and tool-call formats)
+        message = data.get('message', {})
+        
+        # Try new format first (toolCallList)
+        tool_call_list = message.get('toolCallList', [])
+        if tool_call_list:
+            tool_call = tool_call_list[0]
+            tool_call_id = tool_call.get('id', 'unknown')
+            arguments = tool_call.get('arguments', {})
+        else:
+            # Fallback to old format (functionCall)
+            function_call = message.get('functionCall', {})
+            if not function_call:
+                print("❌ No toolCallList or functionCall in request")
+                return jsonify({'error': 'Invalid request format'}), 400
+            
+            tool_call_id = 'function-call'  # Old format doesn't have IDs
+            arguments = function_call.get('parameters', {})
+        
+        customer_address = arguments.get('customer_address', 'Not provided')
+        
+        print(f"🆔 Tool Call ID: {tool_call_id}")
+        print(f"📍 Customer address: {customer_address}")
         
         available_slots = get_available_slots(days_ahead=7)
+        print(f"📅 Generated {len(available_slots)} available slots")
         
         if not available_slots:
-            return jsonify({
-                'result': "I apologize, but I'm having trouble accessing our calendar right now. Let me transfer you to someone who can help you schedule an appointment."
-            }), 200
+            result_text = "I apologize, but I'm having trouble accessing our calendar right now. Let me transfer you to someone who can help you schedule an appointment."
+        else:
+            # Format slots for AI to read naturally
+            result_text = "Here are our next available appointment times:\n"
+            for i, slot in enumerate(available_slots[:5], 1):
+                result_text += f"{i}. {slot['display']} (use datetime: {slot['datetime']})\n"
+            result_text += "\nWhen booking, use the EXACT datetime string shown in parentheses."
         
-        # Format slots for AI to read naturally with explicit datetime instructions
-        slots_text = "Here are our next available appointment times:\n"
-        for i, slot in enumerate(available_slots[:5], 1):  # Show first 5
-            slots_text += f"{i}. {slot['display']} (use datetime: {slot['datetime']})\n"
+        print(f"✅ Returning result with toolCallId: {tool_call_id}")
         
-        slots_text += "\nWhen booking, use the EXACT datetime string shown in parentheses."
+        # CORRECT Vapi response format
+        response = {
+            'results': [
+                {
+                    'toolCallId': tool_call_id,
+                    'result': result_text
+                }
+            ]
+        }
         
-        # Vapi expects ONLY the result field
-        return jsonify({
-            'result': slots_text
-        }), 200
+        print(f"📦 Response: {json.dumps(response)[:300]}...")
+        return jsonify(response), 200
         
     except Exception as e:
+        import traceback
         print(f"❌ Error in check_availability: {e}")
+        print(f"🔍 Traceback: {traceback.format_exc()}")
         return jsonify({
-            'result': "I'm having trouble checking availability right now. Let me transfer you to our scheduling team."
+            'results': [{
+                'toolCallId': tool_call_id,
+                'result': "I'm having trouble checking availability right now. Let me transfer you to our scheduling team."
+            }]
         }), 200
 
 @app.route('/book-appointment', methods=['POST'])
 def book_appointment():
     """Vapi tool: Book an appointment"""
+    tool_call_id = 'unknown'
     try:
         data = request.json
-        print(f"Book appointment request: {data}")
+        print(f"📅 Book appointment request received")
+        print(f"📋 Full request: {json.dumps(data, indent=2)}")
         
-        # Extract data from Vapi tool call
+        # Extract data from Vapi request (handles both function-call and tool-call formats)
         message = data.get('message', {})
-        tool_call = message.get('toolCallList', [{}])[0] if message.get('toolCallList') else {}
-        function_args = tool_call.get('function', {}).get('arguments', {})
+        
+        # Try new format first (toolCallList)
+        tool_call_list = message.get('toolCallList', [])
+        if tool_call_list:
+            tool_call = tool_call_list[0]
+            tool_call_id = tool_call.get('id', 'unknown')
+            function_args = tool_call.get('arguments', {})
+        else:
+            # Fallback to old format (functionCall)
+            function_call = message.get('functionCall', {})
+            if not function_call:
+                print("❌ No toolCallList or functionCall in request")
+                return jsonify({'error': 'Invalid request format'}), 400
+            
+            tool_call_id = 'function-call'
+            function_args = function_call.get('parameters', {})
+        
+        print(f"🆔 Tool Call ID: {tool_call_id}")
         
         # If arguments are in JSON string format, parse them
         if isinstance(function_args, str):
@@ -501,56 +558,89 @@ def book_appointment():
             }
             send_sms_notification(sms_data, message_type='appointment')
             
-            return jsonify({
-                'result': f"Perfect! Your appointment is confirmed for {display_time}. You'll receive a confirmation text shortly with all the details."
-            }), 200
+            result_text = f"Perfect! Your appointment is confirmed for {display_time}. You'll receive a confirmation text shortly with all the details."
         else:
-            return jsonify({
-                'result': "I apologize, but I wasn't able to book that appointment. Let me transfer you to our scheduling team who can help you."
-            }), 200
+            result_text = "I apologize, but I wasn't able to book that appointment. Let me transfer you to our scheduling team who can help you."
+        
+        # CORRECT Vapi response format
+        return jsonify({
+            'results': [{
+                'toolCallId': tool_call_id,
+                'result': result_text
+            }]
+        }), 200
             
     except Exception as e:
+        import traceback
         print(f"❌ Error in book_appointment: {e}")
+        print(f"🔍 Traceback: {traceback.format_exc()}")
         return jsonify({
-            'result': "I'm having trouble booking that appointment. Let me transfer you to someone who can help."
+            'results': [{
+                'toolCallId': tool_call_id,
+                'result': "I'm having trouble booking that appointment. Let me transfer you to someone who can help."
+            }]
         }), 200
 
 @app.route('/cancel-appointment', methods=['POST'])
 def cancel_appointment():
     """Vapi tool: Cancel an appointment"""
+    tool_call_id = 'unknown'
     try:
         data = request.json
-        print(f"Cancel appointment request: {data}")
+        print(f"❌ Cancel appointment request: {data}")
+        
+        # Extract toolCallId
+        message = data.get('message', {})
+        tool_call_list = message.get('toolCallList', [])
+        if tool_call_list:
+            tool_call_id = tool_call_list[0].get('id', 'unknown')
         
         # For now, return a placeholder response
-        # In production, you'd search calendar by phone number and cancel the event
         return jsonify({
-            'result': "I understand you need to cancel your appointment. Let me transfer you to our scheduling team who can help you with that."
+            'results': [{
+                'toolCallId': tool_call_id,
+                'result': "I understand you need to cancel your appointment. Let me transfer you to our scheduling team who can help you with that."
+            }]
         }), 200
         
     except Exception as e:
         print(f"❌ Error in cancel_appointment: {e}")
         return jsonify({
-            'result': "I'm having trouble with that request. Let me transfer you to someone who can help."
+            'results': [{
+                'toolCallId': tool_call_id,
+                'result': "I'm having trouble with that request. Let me transfer you to someone who can help."
+            }]
         }), 200
 
 @app.route('/reschedule-appointment', methods=['POST'])
 def reschedule_appointment():
     """Vapi tool: Reschedule an appointment"""
+    tool_call_id = 'unknown'
     try:
         data = request.json
-        print(f"Reschedule appointment request: {data}")
+        print(f"🔄 Reschedule appointment request: {data}")
+        
+        # Extract toolCallId
+        message = data.get('message', {})
+        tool_call_list = message.get('toolCallList', [])
+        if tool_call_list:
+            tool_call_id = tool_call_list[0].get('id', 'unknown')
         
         # For now, return a placeholder response
-        # In production, you'd find the existing event and update it
         return jsonify({
-            'result': "I understand you need to reschedule. Let me transfer you to our scheduling team who can help you find a new time."
+            'results': [{
+                'toolCallId': tool_call_id,
+                'result': "I understand you need to reschedule. Let me transfer you to our scheduling team who can help you find a new time."
+            }]
         }), 200
         
     except Exception as e:
         print(f"❌ Error in reschedule_appointment: {e}")
         return jsonify({
-            'result': "I'm having trouble with that request. Let me transfer you to someone who can help."
+            'results': [{
+                'toolCallId': tool_call_id,
+                'result': "I'm having trouble with that request. Let me transfer you to someone who can help."
+            }]
         }), 200
 
 @app.route('/test', methods=['POST'])
