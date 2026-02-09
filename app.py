@@ -440,9 +440,9 @@ def check_availability():
         
         slots_text += "\nWhen booking, use the EXACT datetime string shown in parentheses."
         
+        # Vapi expects ONLY the result field
         return jsonify({
-            'result': slots_text,
-            'available_slots': available_slots
+            'result': slots_text
         }), 200
         
     except Exception as e:
