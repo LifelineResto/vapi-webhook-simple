@@ -293,22 +293,40 @@ def get_available_slots(days_ahead=7):
 
 def create_calendar_event(appointment_data):
     """Create an event in Google Calendar"""
+    print(f"\n{'='*60}")
+    print(f"📅 create_calendar_event() called")
+    print(f"{'='*60}")
+    print(f"📋 Appointment data received: {json.dumps(appointment_data, indent=2)}")
+    
     if not calendar_service:
-        print("⚠️ Calendar service not initialized")
+        print("❌ Calendar service not initialized - calendar_service is None")
+        print(f"   GOOGLE_CALENDAR_CREDENTIALS: {'SET' if os.environ.get('GOOGLE_CALENDAR_CREDENTIALS') else 'NOT SET'}")
+        print(f"   GOOGLE_CALENDAR_ID: {os.environ.get('GOOGLE_CALENDAR_ID', 'NOT SET')}")
         return None
+    
+    print(f"✅ Calendar service is initialized")
+    print(f"📍 Calendar ID: {GOOGLE_CALENDAR_ID}")
     
     try:
         # Parse the appointment datetime
+        print(f"\n🕒 Parsing appointment datetime: {appointment_data['appointment_datetime']}")
         appointment_dt = datetime.fromisoformat(appointment_data['appointment_datetime'].replace('Z', '+00:00'))
+        print(f"✅ Parsed datetime: {appointment_dt}")
+        
         pacific_tz = pytz.timezone('America/Los_Angeles')
         
         # Convert to Pacific time if needed
         if appointment_dt.tzinfo is None:
+            print(f"🌎 Localizing to Pacific timezone (no timezone info)")
             appointment_dt = pacific_tz.localize(appointment_dt)
         else:
+            print(f"🌎 Converting to Pacific timezone from {appointment_dt.tzinfo}")
             appointment_dt = appointment_dt.astimezone(pacific_tz)
         
+        print(f"✅ Final appointment time: {appointment_dt.strftime('%Y-%m-%d %I:%M %p %Z')}")
+        
         end_dt = appointment_dt + timedelta(minutes=APPOINTMENT_DURATION_MINUTES)
+        print(f"✅ End time: {end_dt.strftime('%Y-%m-%d %I:%M %p %Z')}")
         
         # Create event
         event = {
@@ -338,16 +356,25 @@ Booked via Vapi AI Assistant""",
             },
         }
         
+        print(f"\n🚀 Attempting to create calendar event...")
+        print(f"📍 Using calendar ID: {GOOGLE_CALENDAR_ID}")
+        
         created_event = calendar_service.events().insert(
             calendarId=GOOGLE_CALENDAR_ID,
             body=event
         ).execute()
         
-        print(f"✅ Calendar event created: {created_event.get('id')}")
+        print(f"\n✅✅✅ SUCCESS! Calendar event created: {created_event.get('id')}")
+        print(f"🔗 Event link: {created_event.get('htmlLink')}")
+        print(f"{'='*60}\n")
         return created_event
         
     except Exception as e:
-        print(f"❌ Error creating calendar event: {e}")
+        import traceback
+        print(f"\n❌❌❌ ERROR creating calendar event: {e}")
+        print(f"🔍 Full traceback:")
+        print(traceback.format_exc())
+        print(f"{'='*60}\n")
         return None
 
 @app.route('/')
