@@ -284,6 +284,7 @@ Issue: {lead_data.get('issue_summary', 'Not specified')}
 
 Appointment: {appointment_time}
 
+Call: +17024219576
 Booked: {get_pacific_time().strftime('%I:%M %p PT')}"""
     else:
         # Regular lead notification (check if appointment was booked)
@@ -299,6 +300,7 @@ Source: {lead_data.get('referral_source', 'Unknown')}
 
 📅 APPOINTMENT: {appointment_time}
 
+Call: +17024219576
 Received: {get_pacific_time().strftime('%I:%M %p PT')}"""
         else:
             message_body = f"""{emoji} NEW LEAD - Lifeline Restoration
@@ -309,6 +311,7 @@ Address: {lead_data.get('address', 'Not provided')}
 Issue: {lead_data.get('issue_summary', 'Not specified')}
 Source: {lead_data.get('referral_source', 'Unknown')}
 
+Call: +17024219576
 Received: {get_pacific_time().strftime('%I:%M %p PT')}"""
     
     success_count = 0
