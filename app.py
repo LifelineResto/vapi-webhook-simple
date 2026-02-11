@@ -224,8 +224,8 @@ def create_albiware_contact(lead_data):
         address_parts = parse_address(lead_data.get('address', ''))
         
         contact_data = {
-            'firstName': lead_data.get('first_name', ''),
-            'lastName': lead_data.get('last_name', ''),
+            'FirstName': lead_data.get('first_name', ''),
+            'LastName': lead_data.get('last_name', ''),
             'phoneNumber': lead_data.get('phone_number', ''),
             'address1': address_parts['address1'],
             'city': address_parts['city'],
@@ -533,9 +533,21 @@ def webhook():
                 appointment_datetime_formatted = appointment_datetime_raw
         
         # Map Vapi field names
+        # Handle name field - could be separate or combined
+        first_name = lead_data.get('first_name', '')
+        last_name = lead_data.get('last_name', '')
+        
+        # If first_name and last_name are empty, try to split from combined name field
+        if not first_name and not last_name:
+            full_name = lead_data.get('name', '') or lead_data.get('customer_name', '')
+            if full_name:
+                name_parts = full_name.strip().split(None, 1)  # Split on first space
+                first_name = name_parts[0] if name_parts else ''
+                last_name = name_parts[1] if len(name_parts) > 1 else ''
+        
         sheet_data = {
-            'first_name': lead_data.get('first_name', ''),
-            'last_name': lead_data.get('last_name', ''),
+            'first_name': first_name,
+            'last_name': last_name,
             'phone_number': lead_data.get('phone_number', '') or customer_number,
             'address': lead_data.get('property_address', ''),
             'referral_source': lead_data.get('referral_source', ''),
