@@ -4,12 +4,20 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import json
+import logging
 from datetime import datetime, timedelta
 from twilio.rest import Client
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import pytz
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -941,6 +949,39 @@ def test_calendar():
             'message': str(e)
         }), 500
 
+# Health check endpoint for Railway monitoring
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for Railway and external monitoring"""
+    try:
+        # Basic health check - can be extended to check dependencies
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "version": "2.0.0",
+            "service": "vapi-webhook"
+        }), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+# Global error handler to prevent crashes
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Global exception handler to log errors without crashing"""
+    logger.error(f"Unhandled exception: {str(e)}", exc_info=True)
+    return jsonify({
+        "error": "Internal server error",
+        "message": "An unexpected error occurred. The error has been logged."
+    }), 500
+
 if __name__ == '__main__':
+    logger.info("🚀 Webhook server starting...")
+    logger.info(f"Port: {os.environ.get('PORT', 5000)}")
+    logger.info(f"Environment: {os.environ.get('RAILWAY_ENVIRONMENT', 'development')}")
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
