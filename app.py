@@ -949,26 +949,6 @@ def test_calendar():
             'message': str(e)
         }), 500
 
-# Health check endpoint for Railway monitoring
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint for Railway and external monitoring"""
-    try:
-        # Basic health check - can be extended to check dependencies
-        return jsonify({
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "version": "2.0.0",
-            "service": "vapi-webhook"
-        }), 200
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        return jsonify({
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
 # Global error handler to prevent crashes
 @app.errorhandler(Exception)
 def handle_exception(e):
